@@ -5,16 +5,17 @@
 #include <iostream>
 #include <thread>
 #include <vector>
-#include "spline.h"
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
 // for convenience
 using json = nlohmann::json;
 
+// Reference information:
 // Reference Info
 // Main car's localization Data (No Noise)
 //["x"] The car's x position in map coordinates
@@ -57,6 +58,7 @@ double distance(double x1, double y1, double x2, double y2)
 {
 	return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
 }
+
 int ClosestWaypoint(double x, double y, const vector<double> &maps_x, const vector<double> &maps_y)
 {
 
@@ -204,7 +206,7 @@ int main() {
   	istringstream iss(line);
   	double x;
   	double y;
-  	float s;
+  	float s;  // distance along the direction of the road
   	float d_x;
   	float d_y;
   	iss >> x;
@@ -224,8 +226,8 @@ int main() {
 
 	// Reference velocity to target
 	double ref_vel = 0.0; // mph
-	
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane,&ref_vel](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -260,29 +262,26 @@ int main() {
           	double end_path_d = j[1]["end_path_d"];
 
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
+			// The data format for each car is: [ id, x, y, vx, vy, s, d]
           	auto sensor_fusion = j[1]["sensor_fusion"];
 
-			// Define X & Y points used for the planner 
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
-
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds		
 			int prev_size = previous_path_x.size();
 
 			if (prev_size > 0) {
 				car_s = end_path_s;
 			}
 
-			// Step 1. Prediction: Extract Information about other cars according to sensor-fusion
+			// Lane identifiers for other cars
+			bool too_close = false;
+			bool car_left = false;
+			bool car_right = false;
 
-			bool car_ahead = false;   	// Car Ahead
-			bool car_left = false;		// Car to the left
-			bool car_right = false;		// Car to the right
-			
+			// Find ref_v to use, see if car is in lane
 			for (int i = 0; i < sensor_fusion.size(); i++) {
+				// Car is in my lane
 				float d = sensor_fusion[i][6];
 
-				// Identify lane of other cars, car lane wdith = 4
+				// Identify the lane of the car in question
 				int car_lane;
 				if (d >= 0 && d < 4) {
 					car_lane = 0;
@@ -294,38 +293,38 @@ int main() {
 					continue;
 				}
 
-				// Get other cars' positon and velocity
+				// Check width of lane, in case cars are merging into our lane
 				double vx = sensor_fusion[i][3];
 				double vy = sensor_fusion[i][4];
 				double get_speed = sqrt(vx*vx + vy*vy);
 				double get_car_s = sensor_fusion[i][5];
 
-				get_car_s += ((double)prev_size*0.02*get_speed);
-
+				// If using previous points can project an s value outwards in time
+				// (What position we will be in in the future)
 				// check s values greater than ours and s gap
+				get_car_s += ((double)prev_size*0.02*get_speed);
 
 				int gap = 30; // m
 
-				// Identify other car's position relative to ours (ahead, left, right)
+				// Identify whether the car is ahead, to the left, or to the right
 				if (car_lane == lane) {
-					// the other car is ahead, decide if the car is too close
-					car_ahead |= (get_car_s > car_s) && ((get_car_s - car_s) < gap);
+					// Another car is ahead
+					too_close |= (get_car_s > car_s) && ((get_car_s - car_s) < gap);
 				} else if (car_lane - lane == 1) {
-					// the other car is to the right
+					// Another car is to the right
 					car_right |= ((car_s - gap) < get_car_s) && ((car_s + gap) > get_car_s);
 				} else if (lane - car_lane == 1) {
-					// the other car is to the left
+					// Another car is to the left
 					car_left |= ((car_s - gap) < get_car_s) && ((car_s + gap) > get_car_s);
 				}
 			}
 
-			// Step 2. Make Decision: Control car to avoid collision based on other cars' position
-
-			double acc = 0.22;    // set acceleration/deceleartion rate
-			double max_speed = 49.6;  // set reference speed
-			if (car_ahead) {
+			// Modulate the speed to avoid collisions. Change lanes if it is safe to do so (nobody to the side)
+			double acc = 0.22;
+			double max_speed = 49.6;
+			if (too_close) {
 				// A car is ahead
-				// Make decide to shift lanes or slow down
+				// Decide to shift lanes or slow down
 				if (!car_right && lane < 2) {
 					// No car to the right AND there is a right lane -> shift right
 					lane++;
@@ -333,7 +332,7 @@ int main() {
 					// No car to the left AND there is a left lane -> shift left
 					lane--;
 				} else {
-					// Decrease speed if nowhere to shift
+					// Nowhere to shift -> slow down
 					ref_vel -= acc;
 				}
 			} else {
@@ -351,7 +350,6 @@ int main() {
 				}
 			}
 
-			// Step 3. Generate Trajectory
 			// Create a list of widely spaced (x,y) waypoints, evenly spaced at 30m
 			vector<double> ptsx;
 			vector<double> ptsy;
@@ -361,7 +359,7 @@ int main() {
 			double ref_y = car_y;
 			double ref_yaw = deg2rad(car_yaw);
 
-			// Use the car as starting reference if previous size is almost empty, u
+			// If previous size is almost empty, use the car as starting reference
 			if (prev_size < 2) {
 				// Use two points that make the path tangent to the car
 				double prev_car_x = car_x - cos(car_yaw);
@@ -421,6 +419,10 @@ int main() {
 			// Set (x,y) points to the spline
 			s.set_points(ptsx, ptsy);
 
+			// Define the actual (x,y) points we will use for the planner
+			vector<double> next_x_vals;
+			vector<double> next_y_vals;
+
 			// Start with all the previous path points from last time
 			for (int i = 0; i < previous_path_x.size(); i++) {
 				next_x_vals.push_back(previous_path_x[i]);
@@ -453,10 +455,10 @@ int main() {
 
 				next_x_vals.push_back(x_point);
 				next_y_vals.push_back(y_point);
-			}          	
-												
+			}
+
 			json msgJson;
-			msgJson["next_x"] = next_x_vals;
+          	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
@@ -506,4 +508,3 @@ int main() {
   }
   h.run();
 }
-
