@@ -218,6 +218,12 @@ int main() {
   	map_waypoints_dx.push_back(d_x);
   	map_waypoints_dy.push_back(d_y);
   }
+
+	// Start in lane 1
+	int lane = 1;
+
+	// Reference velocity to target
+	double ref_vel = 0.0; // mph
 	
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
@@ -272,9 +278,6 @@ int main() {
 			bool car_ahead = false;   	// Car Ahead
 			bool car_left = false;		// Car to the left
 			bool car_right = false;		// Car to the right
-			// Initialize Lane and Reference Speed
-			double ref_vel = 0.0; // in mph
-			int lane = 1;
 			
 			for (int i = 0; i < sensor_fusion.size(); i++) {
 				float d = sensor_fusion[i][6];
@@ -503,3 +506,4 @@ int main() {
   }
   h.run();
 }
+
