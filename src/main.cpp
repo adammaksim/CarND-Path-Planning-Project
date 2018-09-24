@@ -270,18 +270,19 @@ int main() {
 			if (prev_size > 0) {
 				car_s = end_path_s;
 			}
-
+			
+			// Step 1. Prediction: Extract Information about other cars according to sensor-fusion
 			// Lane identifiers for other cars
-			bool too_close = false;
-			bool car_left = false;
-			bool car_right = false;
+			bool car_ahead = false; // Car Ahead
+			bool car_left = false;  // Car to the left
+			bool car_right = false; // Car to the right
 
 			// Find ref_v to use, see if car is in lane
 			for (int i = 0; i < sensor_fusion.size(); i++) {
-				// Car is in my lane
+				
 				float d = sensor_fusion[i][6];
 
-				// Identify the lane of the car in question
+				// Identify lane of other cars, car lane wdith = 4
 				int car_lane;
 				if (d >= 0 && d < 4) {
 					car_lane = 0;
@@ -293,36 +294,34 @@ int main() {
 					continue;
 				}
 
-				// Check width of lane, in case cars are merging into our lane
+				// Get other cars' positon and velocity
 				double vx = sensor_fusion[i][3];
 				double vy = sensor_fusion[i][4];
 				double get_speed = sqrt(vx*vx + vy*vy);
 				double get_car_s = sensor_fusion[i][5];
 
-				// If using previous points can project an s value outwards in time
-				// (What position we will be in in the future)
-				// check s values greater than ours and s gap
 				get_car_s += ((double)prev_size*0.02*get_speed);
-
+				// check s values greater than ours and s gap
 				int gap = 30; // m
 
-				// Identify whether the car is ahead, to the left, or to the right
+				// Identify other car's position relative to ours (ahead, left, right)
 				if (car_lane == lane) {
-					// Another car is ahead
-					too_close |= (get_car_s > car_s) && ((get_car_s - car_s) < gap);
+					// the other car is ahead, decide if the car is too close
+					car_ahead |= (get_car_s > car_s) && ((get_car_s - car_s) < gap);
 				} else if (car_lane - lane == 1) {
-					// Another car is to the right
+					// the other car is to the right
 					car_right |= ((car_s - gap) < get_car_s) && ((car_s + gap) > get_car_s);
 				} else if (lane - car_lane == 1) {
-					// Another car is to the left
+					// the other car is to the left
 					car_left |= ((car_s - gap) < get_car_s) && ((car_s + gap) > get_car_s);
 				}
 			}
 
-			// Modulate the speed to avoid collisions. Change lanes if it is safe to do so (nobody to the side)
+			// Step 2. Make Decision: Control car to avoid collision based on other cars' position
+
 			double acc = 0.22;
 			double max_speed = 49.6;
-			if (too_close) {
+			if (car_ahead) {
 				// A car is ahead
 				// Decide to shift lanes or slow down
 				if (!car_right && lane < 2) {
@@ -350,6 +349,7 @@ int main() {
 				}
 			}
 
+			// Step 3. Generate Trajectory
 			// Create a list of widely spaced (x,y) waypoints, evenly spaced at 30m
 			vector<double> ptsx;
 			vector<double> ptsy;
